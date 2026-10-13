@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Case Generator</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e4e7ec; --brand:#1f4e78; --ok:#067647; --err:#b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1a1f29; --ink:#e8ebf1; --muted:#98a2b3; --line:#2b3240; --brand:#5b9bd5; --ok:#4ade80; --err:#f87171; } }
+  * { box-sizing:border-box } body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:900px; margin:0 auto; padding:28px 16px 60px }
+  h1 { font-size:22px; margin:0 0 4px } p.sub { color:var(--muted); margin:0 0 20px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:14px }
+  h2 { font-size:14px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted) }
+  textarea, input[type=text], select { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; font:inherit }
+  textarea { min-height:90px } select option { color:#000 }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center }
+  .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px }
+  @media (max-width:640px) { .grid { grid-template-columns:1fr } }
+  label.pick { display:inline-block; padding:8px 14px; border:1px dashed var(--line); border-radius:8px; cursor:pointer }
+  label.pick:hover { border-color:var(--brand) } input[type=file] { display:none }
+  .modes { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+  .mode { border:1px solid var(--line); border-radius:10px; padding:12px; cursor:pointer }
+  .mode:has(input:checked) { border-color:var(--brand); outline:2px solid var(--brand) }
+  .mode b { display:block } .mode span { color:var(--muted); font-size:13px }
+  button { background:var(--brand); color:#fff; border:0; padding:10px 20px; border-radius:8px; font:inherit; font-weight:600; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default } button.ghost { background:transparent; color:var(--brand); border:1px solid var(--brand) }
+  table { width:100%; border-collapse:collapse } th,td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top }
+  .ok { color:var(--ok) } .err { color:var(--err) } .muted { color:var(--muted); font-size:13px }
+  .chip { display:flex; justify-content:space-between; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; margin-top:6px; font-size:13px }
+  #msg.ok { color:var(--ok) } #msg.err { color:var(--err) }
+  .chip a { color:var(--err); cursor:pointer; text-decoration:none } details { margin-top:4px } ul { margin:4px 0 0 18px; padding:0 }
+</style>
+</head>
+<body>
+<main>
+  <h1>Test Case Generator</h1>
+  <p class="sub">Upload BRDs <i>or</i> paste a short issue / feature summary. Everything in one run goes into one workbook, one sheet per module.</p>
+
+  <div class="card">
+    <h2>1 · Inputs</h2>
+    <textarea id="links" placeholder="BRD links, one per line (Google Docs shared as “Anyone with the link”)&#10;Optional per-link depth:  https://docs.google.com/document/d/... | smoke"></textarea>
+    <div class="row" style="margin-top:10px">
+      <label class="pick">📄 Choose files<input id="files" type="file" multiple accept=".docx,.pdf,.txt,.md"></label>
+      <label class="pick">📁 Choose folder<input id="folder" type="file" webkitdirectory multiple></label>
+      <span class="muted" id="count">No files selected</span>
+    </div>
+
+    <h2 style="margin-top:18px">Or paste text (no full BRD needed)</h2>
+    <div class="grid">
+      <select id="ptype">
+        <option>Issue summary</option><option>Bug description</option><option>Feature description</option>
+        <option>Change request (CRF) summary</option><option>Requirement summary</option><option>BRD text</option>
+      </select>
+      <input type="text" id="pmodule" placeholder="Module (optional) e.g. Equipment">
+      <select id="pportal"><option value="Auto">Portal: auto-detect</option><option>Admin Portal</option><option>Resident Portal</option></select>
+    </div>
+    <textarea id="ptext" placeholder="e.g. Stock Level Report Item Description and SKU filters are not working. Verify whether the filters return the correct results."></textarea>
+    <div class="row" style="margin-top:8px"><button class="ghost" type="button" id="padd">+ Add to list</button><span class="muted">Add as many as you like - same module = same sheet.</span></div>
+    <div id="plist"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Test depth</h2>
+    <div class="modes">
+      <label class="mode"><input type="radio" name="mode" value="smoke" hidden><b>Smoke</b><span>Positive happy-path scenarios only</span></label>
+      <label class="mode"><input type="radio" name="mode" value="comprehensive" hidden checked><b>Comprehensive</b><span>Positive, negative, boundary, validation, regression</span></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Output</h2>
+    <div class="modes">
+      <label class="mode"><input type="radio" name="out" value="single" hidden checked><b>Single workbook</b><span>All modules in one Excel file, one sheet per module / portal</span></label>
+      <label class="mode"><input type="radio" name="out" value="separate" hidden><b>Separate workbooks</b><span>One Excel file per module, each with its own Summary</span></label>
+    </div>
+    <input type="text" id="account" placeholder="Account name for the file name (optional) e.g. HC" style="margin-top:10px">
+  </div>
+
+  <div class="card">
+    <h2>4 · Your TC template</h2>
+    <div class="row">
+      <label class="pick">📊 Upload template (.xlsx)<input id="template" type="file" accept=".xlsx"></label>
+      <span class="muted" id="tname">Using templates/TC_Template.xlsx if none uploaded</span>
+    </div>
+    <div class="muted" style="margin-top:10px">Every sheet starts with the standard Login test case. Module 1 → sheet 1.0 (Admin) / 1.1 (Resident), module 2 → 2.0 / 2.1 … no limit. The Summary is filled automatically.</div>
+  </div>
+
+  <div class="row" style="margin-bottom:14px"><button id="go">Generate test cases</button><span id="msg" class="muted"></span></div>
+
+  <div class="card" id="results" hidden>
+    <h2>Results</h2>
+    <table><thead><tr><th>Input</th><th>Mode</th><th>Status</th><th>Sheet / file</th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="row" style="margin-top:12px">
+      <span id="dls" class="row"></span>
+      <a id="notes" href="#" hidden><button class="ghost" type="button">Assumptions &amp; notes (.txt)</button></a>
+      <span class="muted" id="sum"></span>
+      <button class="ghost" type="button" id="endsession" hidden title="Delete everything from this session">End session</button>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const SUP = ['.docx', '.pdf', '.txt', '.md'];
+let picked = [];
+let pasted = [];
+let sessionJobs = [];   // jobs created in this browser session (sent to the server when the session ends)
+
+function addFiles(list) {
+  for (const f of list) {
+    if (!SUP.some(e => f.name.toLowerCase().endsWith(e))) continue;
+    if (!picked.some(p => p.name === f.name && p.size === f.size)) picked.push(f);
+  }
+  $('#count').textContent = picked.length ? `${picked.length} BRD file(s) selected` : 'No files selected';
+}
+$('#files').onchange = e => addFiles(e.target.files);
+$('#folder').onchange = e => addFiles(e.target.files);
+$('#template').onchange = e => { $('#tname').textContent = e.target.files[0]?.name || ''; };
+
+function renderPasted() {
+  $('#plist').innerHTML = pasted.map((p, i) =>
+    `<div class="chip"><span><b>${esc(p.type)}</b>${p.module ? ' · ' + esc(p.module) : ''}${p.portal !== 'Auto' ? ' · ' + esc(p.portal) : ''} — ${esc(p.text.slice(0, 70))}${p.text.length > 70 ? '…' : ''}</span><a onclick="pasted.splice(${i},1);renderPasted()">remove</a></div>`).join('');
+}
+$('#padd').onclick = () => {
+  const text = $('#ptext').value.trim();
+  if (!text) return;
+  pasted.push({ type: $('#ptype').value, module: $('#pmodule').value.trim(), portal: $('#pportal').value, text });
+  $('#ptext').value = ''; renderPasted();
+};
+
+$('#go').onclick = async () => {
+  if ($('#ptext').value.trim()) $('#padd').click();   // include text that was typed but not added
+  const fd = new FormData();
+  picked.forEach(f => fd.append('brds', f, f.name));
+  fd.append('links', $('#links').value);
+  fd.append('pasted', JSON.stringify(pasted));
+  fd.append('mode', document.querySelector('input[name=mode]:checked').value);
+  fd.append('outputMode', document.querySelector('input[name=out]:checked').value);
+  fd.append('account', $('#account').value);
+  if ($('#template').files[0]) fd.append('template', $('#template').files[0]);
+
+  $('#go').disabled = true; $('#msg').textContent = 'Uploading…';
+  $('#dls').innerHTML = ''; $('#notes').hidden = true; $('#sum').textContent = '';
+  const res = await fetch('/api/generate', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (!res.ok) { $('#msg').textContent = data.error; $('#go').disabled = false; return; }
+  sessionJobs.push(data.jobId);
+  $('#msg').className = 'muted';
+  $('#msg').textContent = 'Working… you can leave this tab open.';
+  $('#results').hidden = false;
+  poll(data.jobId);
+};
+
+async function poll(id) {
+  const jr = await fetch(`/api/jobs/${id}`);
+  if (!jr.ok) return;                      // job was removed (session ended)
+  const job = await jr.json();
+  $('#rows').innerHTML = job.items.map(i => {
+    const notes = (i.assumptions.length || i.clarifications.length) ? `<details><summary class="muted">${i.assumptions.length} assumption(s) · ${i.clarifications.length} to clarify</summary>
+      <ul>${i.assumptions.map(a => `<li>${esc(a)}</li>`).join('')}${i.clarifications.map(c => `<li><b>Clarify:</b> ${esc(c)}</li>`).join('')}</ul></details>` : '';
+    const status = i.status === 'done' ? `Done · ${i.count} test cases`
+      : i.status === 'error' ? esc(i.error)
+      : i.status === 'generated' ? 'Generated · waiting for the others…' : i.status + '…';
+    return `<tr><td>${esc(i.name)}${notes}</td><td>${i.mode}</td><td class="${i.status === 'done' ? 'ok' : i.status === 'error' ? 'err' : ''}">${status}</td><td>${esc(i.sheet || '')}</td></tr>`;
+  }).join('');
+  if (!job.done) return setTimeout(() => poll(id), 1500);
+  $('#go').disabled = false; $('#msg').className = 'muted'; $('#msg').textContent = 'Finished.';
+  $('#endsession').hidden = false;
+  $('#sum').textContent = job.summary;
+  $('#dls').innerHTML = (job.downloads || []).map(d => `<a href="${d.url}"><button type="button">Download ${esc(d.label)} (.xlsx)</button></a>`).join('');
+  if (job.notesDownload) { $('#notes').href = job.notesDownload; $('#notes').hidden = false; }
+}
+// ---- End session: delete this session's data on the server, then reset the page ----
+function resetApp() {
+  picked = []; pasted = []; renderPasted();
+  ['files', 'folder', 'template'].forEach(id => { $('#' + id).value = ''; });
+  $('#links').value = ''; $('#ptext').value = ''; $('#pmodule').value = '';
+  $('#pportal').value = 'Auto'; $('#ptype').selectedIndex = 0;
+  $('#count').textContent = 'No files selected';
+  $('#tname').textContent = 'Using templates/TC_Template.xlsx if none uploaded';
+  document.querySelector('input[name=mode][value=comprehensive]').checked = true;
+  $('#rows').innerHTML = ''; $('#dls').innerHTML = ''; $('#sum').textContent = '';
+  $('#notes').hidden = true; $('#notes').removeAttribute('href');
+  $('#results').hidden = true; $('#endsession').hidden = true; $('#go').disabled = false;
+  sessionJobs = [];
+}
+$('#endsession').onclick = async () => {
+  if (!confirm('End this session?\n\nDownload your workbook(s) first. All inputs, uploaded files and generated files will be permanently deleted from the server.')) return;
+  const btn = $('#endsession');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/session/end', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobIds: sessionJobs }) });
+    const r = await res.json();
+    resetApp();
+    const msg = $('#msg');
+    if (res.ok && r.ok) { msg.className = 'ok'; msg.textContent = 'Session ended. Uploaded files, generated workbooks and session data were deleted from the server. Copies you already downloaded stay on your computer.'; }
+    else { msg.className = 'err'; msg.textContent = `Session ended, but ${(r.failed || []).length || 'some'} item(s) could not be deleted (${(r.failed || ['cleanup error']).slice(0, 3).join(', ')}). Restart the app to clear the tmp and output folders.`; }
+  } catch (e) {
+    $('#msg').className = 'err';
+    $('#msg').textContent = 'Could not reach the server to end the session, so your data may still be on it. Please try again.';
+  }
+  btn.disabled = false;
+};
+
+// Remember the output format and account name as defaults (change them any time).
+try {
+  const saved = JSON.parse(localStorage.getItem('tcgen-defaults') || '{}');
+  if (saved.out) { const r = document.querySelector(`input[name=out][value=${saved.out}]`); if (r) r.checked = true; }
+  if (saved.account) $('#account').value = saved.account;
+  const save = () => localStorage.setItem('tcgen-defaults', JSON.stringify({ out: document.querySelector('input[name=out]:checked').value, account: $('#account').value }));
+  document.querySelectorAll('input[name=out]').forEach(r => r.addEventListener('change', save));
+  $('#account').addEventListener('input', save);
+} catch (_) {}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+</script>
+</body>
+</html>

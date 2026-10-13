@@ -1,0 +1,16 @@
+{
+  "_help": "OPTIONAL. Rename to template-config.json only if auto-detection of your template headers fails.",
+  "sheetName": "Test Cases",
+  "headerRow": 1,
+  "columns": {
+    "id": "A",
+    "module": "B",
+    "title": "D",
+    "type": "E",
+    "priority": "F",
+    "preconditions": "G",
+    "steps": "H",
+    "testData": "I",
+    "expectedResult": "J"
+  }
+}
