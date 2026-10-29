@@ -75,13 +75,48 @@ function rowStyles(xml, rowNum) {
 const stripCached = xml => xml.replace(/(<f\b[^>]*>[^<]*<\/f>|<f\b[^>]*\/>)<v>[^<]*<\/v>/g, '$1');
 
 // ---------------------------------------------------------------------------------------------
+// Find the header row and the columns by their NAMES (so a different column order still works).
+// ---------------------------------------------------------------------------------------------
+const HEADERS = {
+  id: /^test case id$/i,
+  scenario: /^test scenario$/i,
+  testCase: /^test case$/i,
+  steps: /^test steps?$/i,
+  expected: /^expected( results?| outcome)$/i
+};
+const defaultLayout = () => ({ headerRow: 11, cols: { ...LAYOUT.cols }, statusCols: [...LAYOUT.statusCols], detected: false });
+function detectLayout(xml, ss) {
+  if (!ss || !ss.length) return null;
+  for (const m of xml.matchAll(/<row r="(\d+)"/g)) {
+    const r = Number(m[1]);
+    if (r > 40) break;
+    const rowXml = (xml.slice(m.index).match(/^<row[\s\S]*?<\/row>/) || [''])[0];
+    const cols = {};
+    const status = [];
+    for (const cm of rowXml.matchAll(/<c r="([A-Z]+)\d+"/g)) {
+      const L = cm[1];
+      const text = String(cellInfo(xml, `${L}${r}`, ss).text || '').replace(/\s+/g, ' ').trim();
+      for (const [key, re] of Object.entries(HEADERS)) if (!cols[key] && re.test(text)) cols[key] = L;
+      if (/cycle\s*\d/i.test(text)) status.push(L);
+    }
+    if (cols.id && cols.steps && cols.expected) {
+      const def = defaultLayout();
+      return { headerRow: r, cols: { ...def.cols, ...cols }, statusCols: status.length ? status : def.statusCols, detected: true };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Module sheet
 // ---------------------------------------------------------------------------------------------
 // Pure function: module sheet XML in -> filled module sheet XML out.
-function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login }) {
-  const { cols } = LAYOUT;
-  const [loginA, loginB] = LAYOUT.loginRows;
-  const firstGen = LAYOUT.firstGenRow;
+function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login, ss = [] }) {
+  const layout = detectLayout(xml, ss) || defaultLayout();
+  const { cols } = layout;
+  const loginA = layout.headerRow + 1;
+  const loginB = layout.headerRow + 2;
+  const firstGen = layout.headerRow + 3;
   const styleFirst = rowStyles(xml, loginA);
   const styleNext = { ...styleFirst, ...rowStyles(xml, loginB) };
   if (!Object.keys(styleFirst).length) throw new Error(`The module sheet has no Login row at row ${loginA}, so the layout can't be copied.`);
@@ -95,10 +130,10 @@ function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login }) 
     [`${cols.expected}${loginA}`]: '1. System to display the expected login page.',
     [`${cols.expected}${loginB}`]: '2. User will be able to sign-in based on user credentials and account.'
   };
-  for (const r of LAYOUT.loginRows) {
+  for (const r of [loginA, loginB]) {
     for (const L of letters) {
       const ref = `${L}${r}`;
-      const v = ref in loginValues ? loginValues[ref] : LAYOUT.statusCols.includes(L) ? LAYOUT.statusValue : '';
+      const v = ref in loginValues ? loginValues[ref] : layout.statusCols.includes(L) ? LAYOUT.statusValue : '';
       xml = setCell(xml, ref, v);
     }
   }
@@ -141,7 +176,7 @@ function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login }) 
           [cols.steps]: first ? stepsText : '',
           [cols.expected]: expected[i]
         };
-        LAYOUT.statusCols.forEach(c => { values[c] = LAYOUT.statusValue; });
+        layout.statusCols.forEach(c => { values[c] = LAYOUT.statusValue; });
         const cells = letters.map(L => {
           const continuation = (L === cols.scenario && r !== scenStart) || ((L === cols.testCase || L === cols.steps) && !first);
           return cellXml(`${L}${r}`, continuation ? styleNext[L] : styleFirst[L], values[L]);
@@ -180,7 +215,7 @@ function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login }) 
   // Status dropdowns cover the new rows. The sample hyperlink on the Login steps is dropped.
   if (lastRow >= firstGen) {
     xml = xml.replace(/sqref="([^"]*)"/g, (_, v) =>
-      `sqref="${v.replace(/([A-Z]+)12:([A-Z]+)13/g, (__, a, b) => `${a}12:${b}${lastRow}`)}"`);
+      `sqref="${v.replace(new RegExp(`([A-Z]+)${loginA}:([A-Z]+)${loginB}`, 'g'), (__, a, b) => `${a}${loginA}:${b}${lastRow}`)}"`);
   }
   xml = xml.replace(/<hyperlinks>[\s\S]*?<\/hyperlinks>/, '');
   return { xml: stripCached(xml), lastRow, written };
@@ -379,8 +414,8 @@ function loginCommands(portal, urls) {
 // Standard Login test case wording (from the template). URL comes from .env, otherwise a clear placeholder.
 const loginFor = (portal, urls) => {
   const resident = portal === 'Resident Portal';
-  const url = (resident ? urls.resident : urls.admin) || (resident ? '<RESIDENT_PORTAL_URL>' : '<TENANT_PORTAL_URL>');
-  const name = resident ? 'Resident Portal' : 'Tenant Portal';
+  const url = (resident ? urls.resident : urls.admin) || (resident ? '<RESIDENT_PORTAL_URL>' : '<ADMIN_PORTAL_URL>');
+  const name = resident ? 'Tenant Portal' : 'SBS/Admin Portal';
   return {
     title: `Login to ${name}`,
     description: `Navigate to ${name}`,
@@ -425,13 +460,15 @@ async function writeWorkbook({ templatePath, outPath, specs, urls = {}, automati
     throw new Error(`Could not find the file for sheet ${rid}.`);
   };
 
+  const ss = zip.file('xl/sharedStrings.xml') ? parseSharedStrings(await read('xl/sharedStrings.xml')) : [];
   const slots = entries.filter(e => LAYOUT.slotPattern.test(e.name));
   const src = entries.find(e => e.name === LAYOUT.cloneFrom);
   if (!src) throw new Error(`The template needs a module sheet named "${LAYOUT.cloneFrom}".`);
   const srcPath = sheetFile(src.rid);
   const srcXml = await read(srcPath);
-  const headStyle = rowStyles(srcXml, 11).A;
-  const bodyStyle = rowStyles(srcXml, 12).D;
+  const srcLayout = detectLayout(srcXml, ss) || defaultLayout();
+  const headStyle = rowStyles(srcXml, srcLayout.headerRow)[srcLayout.cols.id];
+  const bodyStyle = rowStyles(srcXml, srcLayout.headerRow + 1)[srcLayout.cols.steps];
 
   // Drawing (logo) of the pattern sheet - read now, the sheet itself may be deleted below.
   const drawRid = (srcXml.match(/<drawing\s+r:id="([^"]+)"/) || [])[1];
@@ -481,7 +518,7 @@ async function writeWorkbook({ templatePath, outPath, specs, urls = {}, automati
 
   for (const spec of specs) {
     const portal = spec.portal;
-    const filled = (xml) => fillSheetXml(xml, { testCases: spec.testCases, code: spec.code, title: spec.title, login: loginFor(portal, urls) });
+    const filled = (xml) => fillSheetXml(xml, { testCases: spec.testCases, code: spec.code, title: spec.title, login: loginFor(portal, urls), ss });
     const existing = entries.find(e => e.name === spec.name && LAYOUT.slotPattern.test(e.name));
     let res;
     if (existing) {
@@ -510,8 +547,8 @@ async function writeWorkbook({ templatePath, outPath, specs, urls = {}, automati
       });
     };
     if (automation) {
-      addCase(`TC_${spec.code}_001`, 'Navigate to Tenant Portal (Login)', [], '', 'Template Login test case');
-      for (const w of res.written) addCase(w.id, w.tc.title, w.tc.automation, w.tc.automationNotes, w.tc.source || spec.source || '');
+      addCase(`TC_${spec.code}_001`, `${loginFor(portal, urls).description} (Login)`, [], '', 'Template Login test case');
+      for (const w of res.written) addCase(w.id, w.tc.title, w.tc.automation, w.tc.automationNotes, `${w.tc.source || spec.source || ''}${w.tc.requirementRef ? ' > ' + w.tc.requirementRef : ''}`);
     }
   }
 

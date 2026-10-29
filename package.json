@@ -2,20 +2,80 @@
   "name": "brd-tc-generator",
   "version": "1.0.0",
   "description": "Generate test cases from BRDs (links, files or folders) straight into your own TC template.",
-  "main": "server.js",
+  "main": "main.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "electron .",
+    "dev": "electron .",
+    "server": "node server.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always",
+    "test": "node test/sections.test.mjs && node test/consolidate.test.mjs && node test/settings.test.mjs && node test/updater.test.mjs",
+    "test:updater:feed": "electron scripts/verify-updater-feed.cjs",
+    "release:assets": "node scripts/stage-release-assets.cjs",
+    "release:check": "node scripts/check-live-updates.cjs"
+  },
+  "build": {
+    "appId": "com.tcgenerator.desktop",
+    "productName": "QA Test Case Generator",
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mangubatjhonby022002-commits",
+        "repo": "qa-test-case-generator-releases"
+      }
+    ],
+    "files": [
+      "**/*",
+      "!**/.env*",
+      "!tmp/**/*",
+      "!output/**/*",
+      "!dist/**/*",
+      "!scripts/**/*",
+      "!test/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "templates/TC_Template.xlsx",
+        "to": "templates/TC_Template.xlsx"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "QA Test Case Generator",
+      "deleteAppDataOnUninstall": false
+    }
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
     "multer": "^2.0.0",
     "pdf-parse": "1.1.1"
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
   }
 }

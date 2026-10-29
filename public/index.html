@@ -28,22 +28,77 @@
   table { width:100%; border-collapse:collapse } th,td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top }
   .ok { color:var(--ok) } .err { color:var(--err) } .muted { color:var(--muted); font-size:13px }
   .chip { display:flex; justify-content:space-between; gap:8px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; margin-top:6px; font-size:13px }
+  .chip-actions { display:flex; gap:8px; white-space:nowrap; flex-shrink:0 }
+  .chip-actions a { color:var(--muted); cursor:pointer; text-decoration:none }
+  .chip-actions a.remove { color:var(--err) }
+  .chip-actions a.edit-link { color:var(--brand) }
+  /* Edit modal */
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index:1000 }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px 24px; max-width:520px; width:95%; display:flex; flex-direction:column; gap:12px }
+  .modal h3 { margin:0; font-size:15px }
+  .modal label { font-size:13px; color:var(--muted); display:block; margin-bottom:4px }
+  .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:4px }
+  /* Separate-mode filename inputs */
+  #sep-names { display:none; margin-top:10px }
+  #sep-names.visible { display:block }
+  .sep-name-row { display:flex; align-items:center; gap:8px; margin-top:8px; font-size:13px }
+  .sep-name-row label { color:var(--muted); white-space:nowrap; min-width:0; flex-shrink:0; max-width:220px; overflow:hidden; text-overflow:ellipsis }
+  .sep-name-row input { flex:1 }
   #msg.ok { color:var(--ok) } #msg.err { color:var(--err) }
-  .chip a { color:var(--err); cursor:pointer; text-decoration:none } details { margin-top:4px } ul { margin:4px 0 0 18px; padding:0 }
+  details { margin-top:4px } ul { margin:4px 0 0 18px; padding:0 }
+  #keywarn { border-color:var(--err) } #keymsg { margin-top:8px } .keyrow input[type=password], .keyrow input[type=text] { flex:1; min-width:230px }
 </style>
 </head>
 <body>
 <main>
-  <h1>Test Case Generator</h1>
-  <p class="sub">Upload BRDs <i>or</i> paste a short issue / feature summary. Everything in one run goes into one workbook, one sheet per module.</p>
+  <div class="row" style="justify-content:space-between; align-items:flex-start; margin-bottom:4px">
+    <div>
+      <h1>Test Case Generator</h1>
+      <p class="sub" style="margin-bottom:0">Upload BRDs <i>or</i> paste a short issue / feature summary. Everything in one run goes into one workbook, one sheet per module.</p>
+    </div>
+    <button class="ghost" type="button" id="opensettings">⚙ Settings</button>
+  </div>
+
+  <div class="card" id="keywarn" hidden>
+    <b>No Gemini API key configured.</b>
+    <span class="muted">Every QA user adds their own key in Settings. It is stored encrypted with the Windows key store and never leaves this computer.</span>
+    <div class="row" style="margin-top:10px">
+      <button type="button" id="warnsettings">Open Settings</button>
+      <span class="muted">Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a></span>
+    </div>
+  </div>
+
+  <div class="card" id="settings" hidden>
+    <h2>Gemini API key</h2>
+    <div class="muted" id="keystatus">Checking…</div>
+    <div class="row keyrow" style="margin-top:10px">
+      <input type="password" id="apikey" placeholder="Paste your Gemini API key" autocomplete="off" spellcheck="false">
+      <button class="ghost" type="button" id="togglekey">Show</button>
+      <button type="button" id="savekey">Save key</button>
+      <button class="ghost" type="button" id="clearkey">Clear</button>
+      <button class="ghost" type="button" id="testkey">Test connection</button>
+    </div>
+    <div class="muted" id="keymsg" style="margin-top:8px"></div>
+
+    <h2 style="margin-top:22px">Updates</h2>
+    <div class="muted" id="updatestatus">Checking…</div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" type="button" id="checkupdate">Check for updates</button>
+      <span class="muted" id="updateversion"></span>
+    </div>
+  </div>
 
   <div class="card">
     <h2>1 · Inputs</h2>
     <textarea id="links" placeholder="BRD links, one per line (Google Docs shared as “Anyone with the link”)&#10;Optional per-link depth:  https://docs.google.com/document/d/... | smoke"></textarea>
     <div class="row" style="margin-top:10px">
-      <label class="pick">📄 Choose files<input id="files" type="file" multiple accept=".docx,.pdf,.txt,.md"></label>
+      <label class="pick">📄 Choose files<input id="files" type="file" multiple accept=".docx,.pdf,.txt,.md,.png,.jpg,.jpeg,.webp,.heic,.mp4,.webm,.mov,.mpeg,.mpg,.wmv,.flv,.3gp,.avi,.mkv,.gif,.bmp,.tif,.tiff"></label>
       <label class="pick">📁 Choose folder<input id="folder" type="file" webkitdirectory multiple></label>
       <span class="muted" id="count">No files selected</span>
+    </div>
+    <div class="row muted" style="margin-top:8px">Files can be BRDs, screenshots (PNG/JPG/WebP) or screen recordings (MP4/WebM). Optional hints for screenshots / recordings:
+      <input type="text" id="vmodule" placeholder="Module e.g. Equipment" style="max-width:200px">
+      <select id="vportal" style="max-width:190px"><option value="Auto">Portal: auto-detect</option><option>Admin Portal</option><option>Resident Portal</option></select>
     </div>
 
     <h2 style="margin-top:18px">Or paste text (no full BRD needed)</h2>
@@ -75,6 +130,10 @@
       <label class="mode"><input type="radio" name="out" value="separate" hidden><b>Separate workbooks</b><span>One Excel file per module, each with its own Summary</span></label>
     </div>
     <input type="text" id="account" placeholder="Account name for the file name (optional) e.g. HC" style="margin-top:10px">
+    <div id="sep-names">
+      <div class="muted" style="font-size:13px;margin-top:6px">Custom filename prefix for each item (optional). Leave blank to use the module name.</div>
+      <div id="sep-name-list"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -87,6 +146,36 @@
   </div>
 
   <div class="row" style="margin-bottom:14px"><button id="go">Generate test cases</button><span id="msg" class="muted"></span></div>
+
+  <!-- Edit pasted-item modal -->
+  <div id="edit-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeEdit()">
+    <div class="modal">
+      <h3>Edit item</h3>
+      <div>
+        <label>Type</label>
+        <select id="edit-type">
+          <option>Issue summary</option><option>Bug description</option><option>Feature description</option>
+          <option>Change request (CRF) summary</option><option>Requirement summary</option><option>BRD text</option>
+        </select>
+      </div>
+      <div>
+        <label>Module (optional)</label>
+        <input type="text" id="edit-module" placeholder="e.g. Equipment">
+      </div>
+      <div>
+        <label>Portal</label>
+        <select id="edit-portal"><option value="Auto">Portal: auto-detect</option><option>Admin Portal</option><option>Resident Portal</option></select>
+      </div>
+      <div>
+        <label>Text</label>
+        <textarea id="edit-text" style="min-height:100px"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" type="button" onclick="closeEdit()">Cancel</button>
+        <button type="button" onclick="saveEdit()">Save changes</button>
+      </div>
+    </div>
+  </div>
 
   <div class="card" id="results" hidden>
     <h2>Results</h2>
@@ -102,7 +191,9 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const SUP = ['.docx', '.pdf', '.txt', '.md'];
+const api = window.tcgen || null;          // the bridge to the app - only there in the desktop app
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const SUP = ['.docx', '.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg', '.webp', '.heic', '.heif', '.mp4', '.webm', '.mov', '.mpeg', '.mpg', '.wmv', '.flv', '.3gp', '.avi', '.mkv', '.m4v', '.gif', '.bmp', '.tif', '.tiff', '.svg', '.psd', '.ico', '.mp3', '.wav', '.doc', '.rtf', '.odt', '.ppt', '.pptx', '.xls', '.xlsx'];
 let picked = [];
 let pasted = [];
 let sessionJobs = [];   // jobs created in this browser session (sent to the server when the session ends)
@@ -112,16 +203,34 @@ function addFiles(list) {
     if (!SUP.some(e => f.name.toLowerCase().endsWith(e))) continue;
     if (!picked.some(p => p.name === f.name && p.size === f.size)) picked.push(f);
   }
-  $('#count').textContent = picked.length ? `${picked.length} BRD file(s) selected` : 'No files selected';
+  $('#count').textContent = picked.length ? `${picked.length} file(s) selected` : 'No files selected';
+  renderSepNames();
 }
 $('#files').onchange = e => addFiles(e.target.files);
 $('#folder').onchange = e => addFiles(e.target.files);
 $('#template').onchange = e => { $('#tname').textContent = e.target.files[0]?.name || ''; };
 
+let editIdx = -1;   // index being edited in the modal
+
 function renderPasted() {
   $('#plist').innerHTML = pasted.map((p, i) =>
-    `<div class="chip"><span><b>${esc(p.type)}</b>${p.module ? ' · ' + esc(p.module) : ''}${p.portal !== 'Auto' ? ' · ' + esc(p.portal) : ''} — ${esc(p.text.slice(0, 70))}${p.text.length > 70 ? '…' : ''}</span><a onclick="pasted.splice(${i},1);renderPasted()">remove</a></div>`).join('');
+    `<div class="chip"><span><b>${esc(p.type)}</b>${p.module ? ' · ' + esc(p.module) : ''}${p.portal !== 'Auto' ? ' · ' + esc(p.portal) : ''} — ${esc(p.text.slice(0, 70))}${p.text.length > 70 ? '…' : ''}</span><span class="chip-actions"><a class="edit-link" onclick="openEdit(${i})">edit</a><a class="remove" onclick="pasted.splice(${i},1);renderPasted();renderSepNames()">remove</a></span></div>`).join('');
+  renderSepNames();
 }
+
+// ---- Edit modal ----
+function openEdit(i) {
+  editIdx = i;
+  const p = pasted[i];
+  $('#edit-type').value = p.type;
+  $('#edit-module').value = p.module;
+  $('#edit-portal').value = p.portal;
+  $('#edit-text').value = p.text;
+  $('#edit-modal').style.display = 'flex';
+  $('#edit-text').focus();
+}
+function closeEdit() { $('#edit-modal').style.display = 'none'; editIdx = -1; }
+
 $('#padd').onclick = () => {
   const text = $('#ptext').value.trim();
   if (!text) return;
@@ -129,15 +238,62 @@ $('#padd').onclick = () => {
   $('#ptext').value = ''; renderPasted();
 };
 
+// ---- Separate-workbooks: per-item filename inputs ----
+// sepNames is kept in sync with pasted[]. Each entry has { label, filename }.
+let sepNames = [];
+
+function renderSepNames() {
+  const sep = document.querySelector('input[name=out][value=separate]').checked;
+  const panel = $('#sep-names');
+  const list = $('#sep-name-list');
+  panel.classList.toggle('visible', sep);
+  if (!sep) return;
+
+  // Build rows: pasted items (identified by index) + uploaded files
+  const rows = [
+    ...pasted.map((p, i) => ({ key: 'pasted_' + i, label: `${p.type}${p.module ? ' · ' + p.module : ''} — ${p.text.slice(0, 50)}${p.text.length > 50 ? '…' : ''}` })),
+    ...picked.map(f => ({ key: 'file_' + f.name, label: f.name }))
+  ];
+
+  // Preserve existing values
+  const prev = {};
+  list.querySelectorAll('.sep-name-row').forEach(r => { prev[r.dataset.key] = r.querySelector('input').value; });
+
+  list.innerHTML = rows.map(r =>
+    `<div class="sep-name-row" data-key="${esc(r.key)}"><label title="${esc(r.label)}">${esc(r.label.length > 38 ? r.label.slice(0,38)+'…' : r.label)}</label><input type="text" placeholder="Filename prefix (optional)" value="${esc(prev[r.key] || '')}"></div>`
+  ).join('');
+}
+
+function getSepNames() {
+  const map = {};
+  $('#sep-name-list').querySelectorAll('.sep-name-row').forEach(r => {
+    const v = r.querySelector('input').value.trim();
+    if (v) map[r.dataset.key] = v;
+  });
+  return map;
+}
+
 $('#go').onclick = async () => {
+  if (api) {                                  // the desktop app: without a key there is nothing to do
+    const st = await api.gemini.status();
+    if (!st.configured) {
+      openSettings();
+      const m = $('#msg'); m.className = 'err';
+      m.textContent = 'No Gemini API key configured. Add your key in Settings first.';
+      return;
+    }
+  }
   if ($('#ptext').value.trim()) $('#padd').click();   // include text that was typed but not added
   const fd = new FormData();
   picked.forEach(f => fd.append('brds', f, f.name));
   fd.append('links', $('#links').value);
+  fd.append('visualModule', $('#vmodule').value);
+  fd.append('visualPortal', $('#vportal').value);
   fd.append('pasted', JSON.stringify(pasted));
   fd.append('mode', document.querySelector('input[name=mode]:checked').value);
   fd.append('outputMode', document.querySelector('input[name=out]:checked').value);
   fd.append('account', $('#account').value);
+  fd.append('sepNames', JSON.stringify(getSepNames()));
   if ($('#template').files[0]) fd.append('template', $('#template').files[0]);
 
   $('#go').disabled = true; $('#msg').textContent = 'Uploading…';
@@ -159,9 +315,9 @@ async function poll(id) {
   $('#rows').innerHTML = job.items.map(i => {
     const notes = (i.assumptions.length || i.clarifications.length) ? `<details><summary class="muted">${i.assumptions.length} assumption(s) · ${i.clarifications.length} to clarify</summary>
       <ul>${i.assumptions.map(a => `<li>${esc(a)}</li>`).join('')}${i.clarifications.map(c => `<li><b>Clarify:</b> ${esc(c)}</li>`).join('')}</ul></details>` : '';
-    const status = i.status === 'done' ? `Done · ${i.count} test cases`
+    const status = i.status === 'done' ? `Done · ${i.count} test cases${i.modules > 1 ? ' in ' + i.modules + ' modules' : ''}`
       : i.status === 'error' ? esc(i.error)
-      : i.status === 'generated' ? 'Generated · waiting for the others…' : i.status + '…';
+      : i.status === 'generated' ? 'Generated · waiting for the others…' : i.status + '…' + (i.detail ? ' (' + i.detail + ')' : '');
     return `<tr><td>${esc(i.name)}${notes}</td><td>${i.mode}</td><td class="${i.status === 'done' ? 'ok' : i.status === 'error' ? 'err' : ''}">${status}</td><td>${esc(i.sheet || '')}</td></tr>`;
   }).join('');
   if (!job.done) return setTimeout(() => poll(id), 1500);
@@ -175,7 +331,7 @@ async function poll(id) {
 function resetApp() {
   picked = []; pasted = []; renderPasted();
   ['files', 'folder', 'template'].forEach(id => { $('#' + id).value = ''; });
-  $('#links').value = ''; $('#ptext').value = ''; $('#pmodule').value = '';
+  $('#links').value = ''; $('#ptext').value = ''; $('#pmodule').value = ''; $('#vmodule').value = ''; $('#vportal').value = 'Auto';
   $('#pportal').value = 'Auto'; $('#ptype').selectedIndex = 0;
   $('#count').textContent = 'No files selected';
   $('#tname').textContent = 'Using templates/TC_Template.xlsx if none uploaded';
@@ -183,6 +339,7 @@ function resetApp() {
   $('#rows').innerHTML = ''; $('#dls').innerHTML = ''; $('#sum').textContent = '';
   $('#notes').hidden = true; $('#notes').removeAttribute('href');
   $('#results').hidden = true; $('#endsession').hidden = true; $('#go').disabled = false;
+  $('#sep-name-list').innerHTML = ''; renderSepNames();
   sessionJobs = [];
 }
 $('#endsession').onclick = async () => {
@@ -203,16 +360,128 @@ $('#endsession').onclick = async () => {
   btn.disabled = false;
 };
 
+// ---- Settings: the user's own Gemini API key and the update state ----
+function openSettings() { $('#settings').hidden = false; $('#opensettings').textContent = '⚙ Close settings'; }
+$('#opensettings').onclick = () => {
+  const s = $('#settings');
+  s.hidden = !s.hidden;
+  $('#opensettings').textContent = s.hidden ? '⚙ Settings' : '⚙ Close settings';
+  if (!s.hidden) refreshKeyStatus();
+};
+$('#warnsettings').onclick = openSettings;
+
+function keyMessage(text, ok) {
+  const m = $('#keymsg');
+  m.className = ok ? 'ok' : 'err';
+  m.textContent = text;
+}
+
+async function refreshKeyStatus() {
+  if (!api) {
+    $('#keystatus').textContent = 'Settings are only available in the desktop app. In a browser the key comes from GEMINI_API_KEY in .env.';
+    $('#keywarn').hidden = true;
+    ['savekey', 'clearkey', 'testkey', 'togglekey'].forEach(id => { $('#' + id).disabled = true; });
+    return;
+  }
+  const st = await api.gemini.status();
+  $('#keystatus').textContent = st.configured
+    ? (st.source === 'app'
+      ? 'A key is saved on this computer (encrypted with the Windows key store) and is used for every generation.'
+      : 'Using the key from .env. Save a key here to use your own.')
+    : 'No key configured yet. Paste your Gemini API key and save it - every QA user has their own key.';
+  if (!st.secureStorage) $('#keystatus').textContent += ' Secure key storage is not available on this system, so a key cannot be saved here.';
+  $('#updateversion').textContent = st.model ? `Model: ${st.model}` : '';
+  $('#keywarn').hidden = st.configured;
+}
+
+$('#togglekey').onclick = () => {
+  const i = $('#apikey');
+  const show = i.type === 'password';
+  i.type = show ? 'text' : 'password';
+  $('#togglekey').textContent = show ? 'Hide' : 'Show';
+};
+
+$('#savekey').onclick = async () => {
+  const value = $('#apikey').value.trim();
+  if (!value) { keyMessage('Enter your Gemini API key first.', false); return; }
+  const r = await api.gemini.save(value);
+  if (r.ok) {
+    $('#apikey').value = '';                 // the key is never kept in the page
+    keyMessage('Key saved. It is encrypted with the Windows key store and used for every generation.', true);
+  } else {
+    keyMessage(r.error || 'The key could not be saved.', false);
+  }
+  await refreshKeyStatus();
+};
+
+$('#clearkey').onclick = async () => {
+  if (!confirm('Remove the saved API key from this computer?')) return;
+  const r = await api.gemini.clear();
+  keyMessage(r.ok ? 'The saved key was removed from this computer.' : (r.error || 'The key could not be removed.'), r.ok);
+  $('#apikey').value = '';
+  await refreshKeyStatus();
+};
+
+$('#testkey').onclick = async () => {
+  const value = $('#apikey').value.trim();
+  keyMessage('Checking the connection…', true);
+  const r = await api.gemini.test(value);
+  keyMessage(r.message, r.ok);
+};
+
+const UPDATE_TEXT = {
+  idle: '', checking: 'Checking for updates…', 'up-to-date': 'You are on the latest version.',
+  available: 'An update is available.', downloading: 'Downloading the update…', downloaded: 'The update is downloaded and ready to install.', error: ''
+};
+function showUpdateState(s) {
+  const el = $('#updatestatus');
+  const text = s.status === 'error' ? (s.message || 'The update check failed.') : (UPDATE_TEXT[s.status] || '');
+  el.textContent = text;
+  el.className = s.status === 'error' ? 'err' : (s.status === 'up-to-date' || s.status === 'downloaded' ? 'ok' : 'muted');
+  if (s.status === 'available' && s.version) el.textContent = `Version ${s.version} is available.`;
+  if (s.status === 'downloading' && s.percent) el.textContent = `Downloading the update… ${s.percent}%`;
+  if (s.status === 'downloaded' && s.version) el.textContent = `Version ${s.version} is downloaded and ready to install.`;
+}
+$('#checkupdate').onclick = async () => {
+  showUpdateState({ status: 'checking', message: 'Checking for updates…' });
+  const s = await api.updater.check();
+  showUpdateState(s);
+};
+if (api) {
+  api.updater.onEvent(showUpdateState);
+  api.updater.state().then(showUpdateState);
+  api.onOpenSettings(openSettings);
+  refreshKeyStatus();
+}
+
 // Remember the output format and account name as defaults (change them any time).
 try {
   const saved = JSON.parse(localStorage.getItem('tcgen-defaults') || '{}');
   if (saved.out) { const r = document.querySelector(`input[name=out][value=${saved.out}]`); if (r) r.checked = true; }
   if (saved.account) $('#account').value = saved.account;
   const save = () => localStorage.setItem('tcgen-defaults', JSON.stringify({ out: document.querySelector('input[name=out]:checked').value, account: $('#account').value }));
-  document.querySelectorAll('input[name=out]').forEach(r => r.addEventListener('change', save));
+  document.querySelectorAll('input[name=out]').forEach(r => r.addEventListener('change', () => { save(); renderSepNames(); }));
   $('#account').addEventListener('input', save);
 } catch (_) {}
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Save edit modal
+function saveEdit() {
+  if (editIdx < 0 || editIdx >= pasted.length) { closeEdit(); return; }
+  pasted[editIdx] = {
+    type: $('#edit-type').value,
+    module: $('#edit-module').value.trim(),
+    portal: $('#edit-portal').value,
+    text: $('#edit-text').value.trim()
+  };
+  closeEdit();
+  renderPasted();
+}
+
+// Allow pressing Escape to close the edit modal
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && editIdx >= 0) closeEdit(); });
+
+// Init: set correct sep-names visibility based on default output mode
+renderSepNames();
 </script>
 </body>
 </html>

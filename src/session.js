@@ -34,10 +34,11 @@ function createCleaner({ jobs, outDir, tmpDir, log = console }) {
     job.cancelled = true;                         // running work stops and discards its results
     for (const it of job.items || []) {
       if (it.path && remove(it.path, tmpDir, failed, 'uploaded file')) removed++;
+      for (const f of it.files || []) if (remove(f.path, tmpDir, failed, 'uploaded file')) removed++;
     }
     if (job.templateTmp && remove(job.templateTmp, tmpDir, failed, 'uploaded template')) removed++;
     if (ID_RE.test(job.id) && remove(path.join(outDir, job.id), outDir, failed, `output/${job.id}`)) removed++;
-    for (const it of job.items || []) { delete it.text; delete it.analysis; delete it.path; delete it.assumptions; delete it.clarifications; }
+    for (const it of job.items || []) { delete it.text; delete it.analysis; delete it.path; delete it.files; delete it.assumptions; delete it.clarifications; }
     job.items = [];
     job.downloads = [];
     jobs.delete(job.id);

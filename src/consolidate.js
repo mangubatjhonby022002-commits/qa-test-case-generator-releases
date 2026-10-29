@@ -24,23 +24,33 @@ function codeFrom(name) {
   return (keep.length ? keep : words).join('').toUpperCase().slice(0, 12) || 'MOD';
 }
 
-// items: [{ id, name, analysis:{moduleName, assumptions, clarifications, testCases[]} }] in processing order
+// items: [{ id, name, analysis:{ modules:[{ moduleName, assumptions, clarifications, testCases[] }] } }] in processing order
+// One input can hold several modules (a BRD is split by the generator), and the same module can
+// appear in several inputs - they end up on the same sheet.
 function consolidate(items) {
   const modules = new Map();
   let removed = 0;
 
   for (const item of items) {
-    const name = cleanModuleName(item.analysis.moduleName);
-    const key = moduleKey(name) || `m${item.id}`;
-    if (!modules.has(key)) modules.set(key, { name, portals: { 'Admin Portal': [], 'Resident Portal': [] }, notes: [] });
-    const mod = modules.get(key);
-    for (const tc of item.analysis.testCases) {
-      const list = mod.portals[tc.portal];
-      if (list.some(x => x.source !== item.name && similar(x.title, tc.title))) { removed++; continue; }
-      list.push({ ...tc, source: item.name, _item: item.id });
-    }
-    if (item.analysis.assumptions.length || item.analysis.clarifications.length) {
-      mod.notes.push({ source: item.name, assumptions: item.analysis.assumptions, clarifications: item.analysis.clarifications });
+    const analysis = item.analysis || {};
+    const list = (Array.isArray(analysis.modules) && analysis.modules.length)
+      ? analysis.modules
+      : [{ moduleName: analysis.moduleName || item.name, assumptions: analysis.assumptions || [], clarifications: analysis.clarifications || [], testCases: analysis.testCases || [] }];
+
+    for (const mod of list) {
+      const name = cleanModuleName(mod.moduleName);
+      const key = moduleKey(name) || `m${item.id}-${mod.moduleName}`;
+      if (!modules.has(key)) modules.set(key, { name, portals: { 'Admin Portal': [], 'Resident Portal': [] }, notes: [] });
+      const bucket = modules.get(key);
+      for (const tc of mod.testCases || []) {
+        const cases = bucket.portals[tc.portal];
+        if (!cases) continue;                                   // unknown portal
+        if (cases.some(x => x.source !== item.name && similar(x.title, tc.title))) { removed++; continue; }
+        cases.push({ ...tc, source: item.name, _item: item.id });
+      }
+      if ((mod.assumptions || []).length || (mod.clarifications || []).length) {
+        bucket.notes.push({ source: item.name, assumptions: mod.assumptions || [], clarifications: mod.clarifications || [] });
+      }
     }
   }
 
