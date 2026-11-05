@@ -1,4 +1,8 @@
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
+}
+const getModel = () => process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const MAX_CHARS = 150000;
 const { outline, sectionText } = require('./sections');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -66,6 +70,7 @@ Return ONLY JSON in exactly this shape:
 {"moduleName":"","portals":["Admin Portal"],"assumptions":[""],"clarifications":[""],
  "testCases":[{"portal":"Admin Portal","scenario":"","title":"","category":"Positive","priority":"High","requirementRef":"",
    "preconditions":"","steps":"1. ...\\n2. ...","testData":"","expectedResult":"1. ...\\n2. ...",
+   "description":"One sentence: what this test case verifies and why it matters",
    "automation":["click: ..."],"automationNotes":""}]}
 Field rules: "portal" is "Admin Portal" or "Resident Portal" (one per test case; if the input applies to both portals and the workflow differs, write separate cases).
 "scenario" groups related test cases (same text for the same scenario). "title" is the specific test case name.
@@ -118,7 +123,7 @@ Rules:
 - "priority" is High, Medium or Low.
 ${automation ? AUTOMATION_RULES : ''}
 Return ONLY JSON in this exact shape:
-{"testCases":[{"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":""${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}
+{"testCases":[{"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":"","description":"One sentence: what this test case verifies and why it matters"${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}
 
 BRD:
 """
@@ -183,7 +188,7 @@ Rules:
 - "priority" is High, Medium or Low.
 ${multi ? '- "portal" is "Admin Portal" or "Resident Portal": the portal where that test case is performed (one per test case).\n' : ''}${automation ? AUTOMATION_RULES : ''}
 Return ONLY JSON in this exact shape:
-{"testCases":[{${multi ? '"portal":"Admin Portal",' : ''}"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":""${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}
+{"testCases":[{${multi ? '"portal":"Admin Portal",' : ''}"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":"","description":"One sentence: what this test case verifies and why it matters"${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}
 ${sharedText ? `\nSHARED CONTEXT (applies to every module):\n"""\n${sharedText}\n"""\n` : ''}
 ${whole ? 'BRD' : `BRD SECTION FOR "${module.moduleName}"`}:
 """
@@ -241,17 +246,20 @@ Evidence rules:
 - "module" is the TEST SCENARIO inside this module (e.g. "Search Equipment"); the same scenario uses the exact same text. "title" is the specific test case name. "priority" is High, Medium or Low.
 ${automation ? AUTOMATION_RULES : ''}
 Return ONLY JSON in this exact shape:
-{"clarifications":[""],"testCases":[{"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":""${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}`;
+{"clarifications":[""],"testCases":[{"requirementRef":"","module":"","title":"","type":"Positive","priority":"High","preconditions":"","steps":"","testData":"","expectedResult":"","description":"One sentence: what this test case verifies and why it matters"${automation ? ',"automation":["click: ..."],"automationNotes":""' : ''}}]}`;
 }
 
 async function callGemini(prompt, media = []) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('No Gemini API key configured. Add it in the app under Settings, or set GEMINI_API_KEY in .env.');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+  const primaryModel = getModel();
+  const fallbackModel = primaryModel !== 'gemini-3.5-flash' ? 'gemini-3.5-flash' : 'gemini-3-flash-preview';
+  let currentModel = primaryModel;
   // A long BRD with a slow connection can need more than five minutes.
   const timeout = Number(process.env.GEMINI_TIMEOUT_MS || 600000);
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
       signal: AbortSignal.timeout(timeout),
@@ -271,6 +279,13 @@ async function callGemini(prompt, media = []) {
         }
       })
     });
+    if (res.status === 503 || res.status === 404) {
+      if (currentModel !== fallbackModel) {
+        console.warn(`[Gemini] ${currentModel} returned HTTP ${res.status}. Falling back to ${fallbackModel}...`);
+        currentModel = fallbackModel;
+        continue;
+      }
+    }
     if (res.status === 429 || res.status >= 500) {
       lastErr = new Error(`Gemini busy (HTTP ${res.status})`);
       await sleep(2500 * attempt);
@@ -341,6 +356,7 @@ function mapTestCases(raw, { classic, mode, hinted, fallback }) {
     steps: str(t.steps),
     testData: str(t.testData),
     expectedResult: str(t.expectedResult),
+    description: str(t.description),
     automation: list(t.automation),
     automationNotes: str(t.automationNotes)
   })).filter(t => t.title);
@@ -361,6 +377,8 @@ async function generateSingle({ text, inputType = 'BRD document', sourceName = '
   const cases = mapTestCases(Array.isArray(parsed) ? parsed : parsed.testCases, { classic, mode, hinted: hinted || (classic ? 'Admin Portal' : null), fallback });
   return {
     moduleName: str(moduleHint) || (classic ? '' : str(parsed.moduleName)) || '',
+    description: str(parsed.description) || (cases[0]?.description ? cases[0].description : ''),
+    summary: str(parsed.description) || '',
     assumptions: classic ? [] : list(parsed.assumptions),
     clarifications: [...(classic ? [] : list(parsed.clarifications)), ...(truncated ? [CUT_NOTE] : [])],
     testCases: cases
@@ -453,7 +471,7 @@ async function analyzeInput(opts) {
   if (opts.inputType === 'Screenshots' || opts.inputType === 'Screen recording') return analyzeMedia(opts);
   const { text, inputType = 'BRD document', sourceName = '', moduleHint = '', mode = 'comprehensive', automation = false, onProgress = () => {} } = opts;
   const wrap = (r, notes = []) => {
-    const mod = { moduleName: r.moduleName, assumptions: r.assumptions, clarifications: [...r.clarifications, ...notes], testCases: r.testCases };
+    const mod = { moduleName: r.moduleName, summary: r.summary || r.description || '', description: r.description || r.summary || '', assumptions: r.assumptions, clarifications: [...r.clarifications, ...notes], testCases: r.testCases };
     return { modules: [mod], assumptions: mod.assumptions, clarifications: mod.clarifications };
   };
   const split = CLASSIC_TYPES.has(inputType) && !moduleHint && text.length >= MIN_SPLIT_CHARS;
@@ -486,7 +504,14 @@ async function analyzeInput(opts) {
       const fallback = m.portals[0];
       const cases = mapTestCases(Array.isArray(value) ? value : value.testCases, { classic: true, mode, hinted: m.portals.length === 1 ? m.portals[0] : null, fallback });
       onProgress(`${++done}/${names.length} modules done`);
-      return { moduleName: m.moduleName, assumptions: [], clarifications: truncated ? [`${m.moduleName}: ${CUT_NOTE}`] : [], testCases: cases };
+      return {
+        moduleName: m.moduleName,
+        summary: m.summary || '',
+        description: m.summary || '',
+        assumptions: [],
+        clarifications: truncated ? [`${m.moduleName}: ${CUT_NOTE}`] : [],
+        testCases: cases
+      };
     } catch (e) {
       console.error(`[${sourceName} > ${m.moduleName}] failed: ${e.message}`);
       onProgress(`${++done}/${names.length} modules done`);

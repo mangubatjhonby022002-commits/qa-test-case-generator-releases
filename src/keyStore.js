@@ -7,7 +7,16 @@ const fs = require('fs');
 const path = require('path');
 
 const KEY_FILE = 'gemini-key.bin';
-const KEY_RE = /^[A-Za-z0-9_\-.]{10,200}$/;      // Gemini keys: no spaces, no control characters
+const KEY_RE = /^[A-Za-z0-9_\-.]{10,250}$/;      // Gemini keys: no spaces, no control characters
+
+// Normalizes user input when pasting an API key: strips quotes, env prefixes, and whitespace.
+function cleanKey(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  s = s.replace(/^["'`]|["'`]$/g, '').trim();
+  s = s.replace(/^(?:GEMINI_API_KEY|API_KEY|KEY)\s*[:=]\s*/i, '').trim();
+  s = s.replace(/^["'`]|["'`]$/g, '').trim();
+  return s;
+}
 
 function electronPart(name) {
   try {
@@ -59,7 +68,7 @@ function createKeyStore({ safeStorage = electronPart('safeStorage'), dir = null,
   // Saves the key encrypted. Without a working OS key store nothing is written - a plain text
   // fallback would put the key on disk unprotected, so it is refused with an explanation.
   function save(key) {
-    const value = String(key == null ? '' : key).trim();
+    const value = cleanKey(key);
     if (!value) return { ok: false, error: 'Enter your Gemini API key first.' };
     if (!KEY_RE.test(value)) return { ok: false, error: 'That does not look like a Gemini API key (letters, digits, - and _ only).' };
     if (!encryptionAvailable()) {
@@ -107,4 +116,4 @@ function getKeyStore() {
   return instance;
 }
 
-module.exports = { createKeyStore, getKeyStore, KEY_FILE, KEY_RE };
+module.exports = { createKeyStore, getKeyStore, KEY_FILE, KEY_RE, cleanKey };

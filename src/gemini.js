@@ -1,16 +1,26 @@
 // Minimal Gemini API calls that are used to check the API key.
 // The key is only ever sent in the x-goog-api-key header - never in a URL, never logged.
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
+}
+const { cleanKey } = require('./keyStore');
+
 const MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 // Checks the key with the smallest possible request: list the models the key can reach.
 // No BRD text, no user data - only the key itself.
-async function testConnection(key, { fetchImpl = globalThis.fetch, model = process.env.GEMINI_MODEL || 'gemini-3.8-flash' } = {}) {
-  if (!key || !String(key).trim()) return { ok: false, message: 'No API key configured yet.' };
+async function testConnection(key, { fetchImpl = globalThis.fetch, model = process.env.GEMINI_MODEL || 'gemini-3.5-flash' } = {}) {
+  const sanitized = cleanKey(key);
+  if (!sanitized) return { ok: false, message: 'No API key configured yet.' };
   if (typeof fetchImpl !== 'function') return { ok: false, message: 'No network access available.' };
 
   let res;
   try {
-    res = await fetchImpl(MODELS_URL, { method: 'GET', headers: { 'x-goog-api-key': String(key).trim() } });
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(15000)
+      : undefined;
+    res = await fetchImpl(MODELS_URL, { method: 'GET', signal, headers: { 'x-goog-api-key': sanitized } });
   } catch (err) {
     return { ok: false, message: `Could not reach Google's Gemini API: ${err.message}` };
   }

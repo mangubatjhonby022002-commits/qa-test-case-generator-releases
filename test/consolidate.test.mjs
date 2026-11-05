@@ -35,8 +35,8 @@ const tc = (title, portal = 'Admin Portal') => ({
 
   const { specs, notes } = consolidate(items);
   assert.strictEqual(specs.length, 3, 'Test 1 Failed: every module needs its own sheet');
-  // .0 = Admin Portal, .1 = Resident Portal (the third module only has resident cases)
-  assert.deepStrictEqual(specs.map(s => s.name), ['1.0', '2.0', '3.1'], 'Test 1 Failed: the sheets must be numbered per module and portal');
+  // Dynamic sheet names based on input filename + portal: brd(Admin), brd(Portal), etc.
+  assert.deepStrictEqual(specs.map(s => s.name), ['brd(Admin)', 'brd_Dashboard(Admin)', 'brd(Portal)'], 'Test 1 Failed: dynamic sheet names expected');
   assert.strictEqual(specs[0].moduleName, 'Equipment', 'Test 1 Failed: the module name must be kept');
   assert.strictEqual(specs[0].testCases.length, 2, 'Test 1 Failed: the test cases of the module must be kept');
   assert.strictEqual(specs[2].portal, 'Resident Portal', 'Test 1 Failed: the portal must be kept');
@@ -65,7 +65,7 @@ const tc = (title, portal = 'Admin Portal') => ({
     }
   }];
   const { specs } = consolidate(items);
-  assert.deepStrictEqual(specs.map(s => s.name), ['1.0', '1.1'], 'Test 3 Failed: a module with two portals needs 1.0 and 1.1');
+  assert.deepStrictEqual(specs.map(s => s.name), ['a(Admin)', 'a(Portal)'], 'Test 3 Failed: a module with two portals needs a(Admin) and a(Portal)');
   console.log('✓ Test 3: A module used in two portals gets both sheets');
 }
 
@@ -97,8 +97,8 @@ const tc = (title, portal = 'Admin Portal') => ({
   const JSZip = require('jszip');
   const zip = await JSZip.loadAsync(buf);
   const workbookXml = await zip.file('xl/workbook.xml').async('string');
-  assert.ok(/name="1\.0"/.test(workbookXml), 'Test 4 Failed: the workbook must contain the sheet of the first module');
-  assert.ok(/name="2\.0"/.test(workbookXml), 'Test 4 Failed: the workbook must contain the sheet of the second module');
+  assert.ok(/name="brd\(Admin\)"/.test(workbookXml), 'Test 4 Failed: the workbook must contain the sheet of the first module');
+  assert.ok(/name="brd_Dashboard\(Admin\)"/.test(workbookXml), 'Test 4 Failed: the workbook must contain the sheet of the second module');
 
   // The module name and the test case must be written into the module sheet
   const sheets = Object.keys(zip.files).filter(f => /^xl\/worksheets\/sheet\d+\.xml$/.test(f));
@@ -108,7 +108,9 @@ const tc = (title, portal = 'Admin Portal') => ({
     if (xml.includes('Add equipment') && xml.includes('Equipment')) moduleSheet = f;
   }
   assert.ok(moduleSheet, 'Test 4 Failed: the module sheet must contain the module name and the test case');
-  console.log('✓ Test 4: The Excel workbook is written with a sheet per module');
+  const modXml = await zip.file(moduleSheet).async('string');
+  assert.ok(/<c r="B2"[^>]*>[\s\S]*?<\/c>/.test(modXml), 'Test 4 Failed: B2 description must be written');
+  console.log('✓ Test 4: The Excel workbook is written with a sheet per module and test description');
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

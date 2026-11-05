@@ -1,4 +1,8 @@
 require('dotenv').config();
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
+}
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
@@ -6,10 +10,11 @@ const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { extractFromFile, extractFromUrl, loadMedia, mediaKind } = require('./src/parsers');
 const { analyzeInput } = require('./src/generator');
-const { consolidate } = require('./src/consolidate');
+const { consolidate, safeSheetName } = require('./src/consolidate');
 const { writeWorkbook } = require('./src/templateWriter');
 const { createCleaner } = require('./src/session');
-const { getKeyStore } = require('./src/keyStore');
+const { getKeyStore, cleanKey } = require('./src/keyStore');
+const { testConnection } = require('./src/gemini');
 
 const PORT = process.env.PORT || 3000;
 const CONCURRENCY = Number(process.env.CONCURRENCY || 3);
@@ -117,10 +122,17 @@ async function finishJob(job) {
           const customLabel = sourceNames.map(n => itemPrefix.get(n)).find(Boolean) || '';
           const moduleName = list[0].moduleName;
           const baseName = customLabel ? safeName(customLabel) : safeName(moduleName);
+          const sheetBase = customLabel ? safeSheetName(customLabel) : null;
           outputs.push({
             label: moduleName,
             fileName: `${account ? account + '_' : ''}${baseName}_TestCases.xlsx`,
-            specs: list.map(sp => ({ ...sp, moduleNumber: 1, name: `1.${sp.portal === 'Resident Portal' ? 1 : 0}` }))
+            specs: list.map(sp => ({
+              ...sp,
+              moduleNumber: 1,
+              name: sheetBase
+                ? `${sheetBase}${sp.portal === 'Resident Portal' ? '(Portal)' : '(Admin)'}`
+                : sp.name
+            }))
           });
         }
       } else {
@@ -282,6 +294,47 @@ app.get('/api/download/:jobId/:file', (req, res) => {
   res.download(path.join(OUT, path.basename(req.params.jobId), path.basename(req.params.file)), err => {
     if (err && !res.headersSent) res.status(404).send('File not found - the session may have been ended.');
   });
+});
+
+// Key management endpoints (enables browser-based use when not running in Electron desktop shell)
+app.get('/api/key/status', (req, res) => {
+  const st = getKeyStore().status();
+  res.json({
+    configured: Boolean(st.configured || process.env.GEMINI_API_KEY),
+    source: st.source !== 'none' ? st.source : (process.env.GEMINI_API_KEY ? 'env' : 'none'),
+    secureStorage: st.secureStorage,
+    model: st.model
+  });
+});
+
+app.post('/api/key/save', (req, res) => {
+  const rawKey = req.body?.key;
+  const cleaned = cleanKey(rawKey);
+  if (!cleaned) return res.status(400).json({ ok: false, error: 'Enter your Gemini API key first.' });
+
+  const ks = getKeyStore();
+  const st = ks.status();
+  if (st.secureStorage) {
+    const r = ks.save(cleaned);
+    return res.json(r);
+  }
+  process.env.GEMINI_API_KEY = cleaned;
+  res.json({ ok: true, status: { configured: true, source: 'session', secureStorage: false, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash' } });
+});
+
+app.post('/api/key/clear', (req, res) => {
+  const ks = getKeyStore();
+  ks.clear();
+  delete process.env.GEMINI_API_KEY;
+  res.json({ ok: true, status: ks.status() });
+});
+
+app.post('/api/key/test', async (req, res) => {
+  const rawKey = req.body?.key;
+  const candidate = cleanKey(rawKey) || getKeyStore().get() || process.env.GEMINI_API_KEY;
+  if (!candidate) return res.json({ ok: false, message: 'No API key configured yet - enter one first.' });
+  const result = await testConnection(candidate);
+  res.json(result);
 });
 
 // End Session: delete this session's uploads, generated files and in-memory data.

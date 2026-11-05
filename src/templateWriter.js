@@ -17,6 +17,7 @@ const LAYOUT = {
   loginRows: [12, 13],              // the standard Login test case - never removed
   firstGenRow: 14,                  // generated test cases start here
   titleCell: 'B1',
+  descriptionCell: 'B2',            // Test Description value (row 2 in template, above Name of Tester/s)
   cols: { id: 'A', scenario: 'B', testCase: 'C', steps: 'D', expected: 'K' },
   widths: { testCase: 29.33, steps: 37, expected: 33.89 },
   statusCols: ['M', 'O', 'Q', 'S', 'U', 'W'],
@@ -111,7 +112,7 @@ function detectLayout(xml, ss) {
 // Module sheet
 // ---------------------------------------------------------------------------------------------
 // Pure function: module sheet XML in -> filled module sheet XML out.
-function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login, ss = [] }) {
+function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', description = '', login, ss = [] }) {
   const layout = detectLayout(xml, ss) || defaultLayout();
   const { cols } = layout;
   const loginA = layout.headerRow + 1;
@@ -191,6 +192,7 @@ function fillSheetXml(xml, { testCases = [], code = 'MOD', title = '', login, ss
   const lastRow = Math.max(r - 1, loginB);
 
   if (title) xml = setCell(xml, LAYOUT.titleCell, title);
+  if (description) xml = setCell(xml, LAYOUT.descriptionCell, description);
 
   const sd = xml.match(/<sheetData[^>]*>/);
   const sdStart = sd.index + sd[0].length;
@@ -518,7 +520,7 @@ async function writeWorkbook({ templatePath, outPath, specs, urls = {}, automati
 
   for (const spec of specs) {
     const portal = spec.portal;
-    const filled = (xml) => fillSheetXml(xml, { testCases: spec.testCases, code: spec.code, title: spec.title, login: loginFor(portal, urls), ss });
+    const filled = (xml) => fillSheetXml(xml, { testCases: spec.testCases, code: spec.code, title: spec.title, description: spec.description || '', login: loginFor(portal, urls), ss });
     const existing = entries.find(e => e.name === spec.name && LAYOUT.slotPattern.test(e.name));
     let res;
     if (existing) {

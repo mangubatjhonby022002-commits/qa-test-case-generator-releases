@@ -73,6 +73,7 @@
     <div class="muted" id="keystatus">Checking…</div>
     <div class="row keyrow" style="margin-top:10px">
       <input type="password" id="apikey" placeholder="Paste your Gemini API key" autocomplete="off" spellcheck="false">
+      <button class="ghost" type="button" id="pastekey" title="Paste from clipboard">📋 Paste</button>
       <button class="ghost" type="button" id="togglekey">Show</button>
       <button type="button" id="savekey">Save key</button>
       <button class="ghost" type="button" id="clearkey">Clear</button>
@@ -274,14 +275,12 @@ function getSepNames() {
 }
 
 $('#go').onclick = async () => {
-  if (api) {                                  // the desktop app: without a key there is nothing to do
-    const st = await api.gemini.status();
-    if (!st.configured) {
-      openSettings();
-      const m = $('#msg'); m.className = 'err';
-      m.textContent = 'No Gemini API key configured. Add your key in Settings first.';
-      return;
-    }
+  const st = await keyClient.status();
+  if (!st.configured) {
+    openSettings();
+    const m = $('#msg'); m.className = 'err';
+    m.textContent = 'No Gemini API key configured. Add your key in Settings first.';
+    return;
   }
   if ($('#ptext').value.trim()) $('#padd').click();   // include text that was typed but not added
   const fd = new FormData();
@@ -376,22 +375,106 @@ function keyMessage(text, ok) {
   m.textContent = text;
 }
 
-async function refreshKeyStatus() {
-  if (!api) {
-    $('#keystatus').textContent = 'Settings are only available in the desktop app. In a browser the key comes from GEMINI_API_KEY in .env.';
-    $('#keywarn').hidden = true;
-    ['savekey', 'clearkey', 'testkey', 'togglekey'].forEach(id => { $('#' + id).disabled = true; });
-    return;
+function sanitizeApiKeyInput(val) {
+  let s = String(val || '').trim();
+  s = s.replace(/^["'`]|["'`]$/g, '').trim();
+  s = s.replace(/^(?:GEMINI_API_KEY|API_KEY|KEY)\s*[:=]\s*/i, '').trim();
+  s = s.replace(/^["'`]|["'`]$/g, '').trim();
+  return s;
+}
+
+const keyClient = {
+  status: async () => {
+    if (api) return api.gemini.status();
+    try {
+      const res = await fetch('/api/key/status');
+      return await res.json();
+    } catch (_) {
+      return { configured: false, source: 'none', secureStorage: false, model: '' };
+    }
+  },
+  save: async key => {
+    const cleaned = sanitizeApiKeyInput(key);
+    if (api) return api.gemini.save(cleaned);
+    try {
+      const res = await fetch('/api/key/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cleaned })
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+  clear: async () => {
+    if (api) return api.gemini.clear();
+    try {
+      const res = await fetch('/api/key/clear', { method: 'POST' });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+  test: async key => {
+    const cleaned = sanitizeApiKeyInput(key);
+    if (api) return api.gemini.test(cleaned);
+    try {
+      const res = await fetch('/api/key/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: cleaned })
+      });
+      return await res.json();
+    } catch (err) {
+      return { ok: false, message: `Connection test failed: ${err.message}` };
+    }
   }
-  const st = await api.gemini.status();
+};
+
+async function refreshKeyStatus() {
+  const st = await keyClient.status();
   $('#keystatus').textContent = st.configured
     ? (st.source === 'app'
       ? 'A key is saved on this computer (encrypted with the Windows key store) and is used for every generation.'
-      : 'Using the key from .env. Save a key here to use your own.')
+      : (st.source === 'session'
+        ? 'A key is active for this server session.'
+        : 'Using the key from .env. Save a key here to use your own.'))
     : 'No key configured yet. Paste your Gemini API key and save it - every QA user has their own key.';
-  if (!st.secureStorage) $('#keystatus').textContent += ' Secure key storage is not available on this system, so a key cannot be saved here.';
+  if (!st.secureStorage && api) $('#keystatus').textContent += ' Secure key storage is not available on this system, so a key cannot be saved here.';
   $('#updateversion').textContent = st.model ? `Model: ${st.model}` : '';
   $('#keywarn').hidden = st.configured;
+  ['savekey', 'clearkey', 'testkey', 'togglekey', 'pastekey'].forEach(id => {
+    const el = $('#' + id);
+    if (el) el.disabled = false;
+  });
+}
+
+// Automatically sanitize input when pasting into the apikey box
+$('#apikey').addEventListener('paste', () => {
+  setTimeout(() => {
+    $('#apikey').value = sanitizeApiKeyInput($('#apikey').value);
+  }, 0);
+});
+
+// Clipboard paste button
+if (navigator.clipboard && navigator.clipboard.readText) {
+  $('#pastekey').onclick = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const cleaned = sanitizeApiKeyInput(text);
+      if (cleaned) {
+        $('#apikey').value = cleaned;
+        keyMessage('Key pasted from clipboard. Click "Save key" or "Test connection".', true);
+      } else {
+        keyMessage('Clipboard does not contain text.', false);
+      }
+    } catch (_) {
+      $('#apikey').focus();
+    }
+  };
+} else {
+  $('#pastekey').style.display = 'none';
 }
 
 $('#togglekey').onclick = () => {
@@ -402,9 +485,9 @@ $('#togglekey').onclick = () => {
 };
 
 $('#savekey').onclick = async () => {
-  const value = $('#apikey').value.trim();
+  const value = sanitizeApiKeyInput($('#apikey').value);
   if (!value) { keyMessage('Enter your Gemini API key first.', false); return; }
-  const r = await api.gemini.save(value);
+  const r = await keyClient.save(value);
   if (r.ok) {
     $('#apikey').value = '';                 // the key is never kept in the page
     keyMessage('Key saved. It is encrypted with the Windows key store and used for every generation.', true);
@@ -416,16 +499,16 @@ $('#savekey').onclick = async () => {
 
 $('#clearkey').onclick = async () => {
   if (!confirm('Remove the saved API key from this computer?')) return;
-  const r = await api.gemini.clear();
+  const r = await keyClient.clear();
   keyMessage(r.ok ? 'The saved key was removed from this computer.' : (r.error || 'The key could not be removed.'), r.ok);
   $('#apikey').value = '';
   await refreshKeyStatus();
 };
 
 $('#testkey').onclick = async () => {
-  const value = $('#apikey').value.trim();
+  const value = sanitizeApiKeyInput($('#apikey').value);
   keyMessage('Checking the connection…', true);
-  const r = await api.gemini.test(value);
+  const r = await keyClient.test(value);
   keyMessage(r.message, r.ok);
 };
 

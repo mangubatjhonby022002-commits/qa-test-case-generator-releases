@@ -1,7 +1,11 @@
-const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, MenuItem, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const dotenv = require('dotenv');
+const dns = require('dns');
+if (typeof dns.setDefaultResultOrder === 'function') {
+  try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
+}
 
 // 1. Setup paths based on environment (development vs packaged)
 const isPackaged = app.isPackaged;
@@ -153,6 +157,24 @@ async function launchApp() {
     if (!url.startsWith(`http://${host}:${activePort}`)) {
       event.preventDefault();
       shell.openExternal(url);
+    }
+  });
+
+  // Enable right-click context menu (Cut, Copy, Paste) on input fields and selections
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const menu = new Menu();
+    if (params.isEditable) {
+      menu.append(new MenuItem({ role: 'undo' }));
+      menu.append(new MenuItem({ role: 'redo' }));
+      menu.append(new MenuItem({ type: 'separator' }));
+      menu.append(new MenuItem({ role: 'cut' }));
+      menu.append(new MenuItem({ role: 'copy' }));
+      menu.append(new MenuItem({ role: 'paste' }));
+      menu.append(new MenuItem({ role: 'selectAll' }));
+      menu.popup({ window: mainWindow });
+    } else if (params.selectionText) {
+      menu.append(new MenuItem({ role: 'copy' }));
+      menu.popup({ window: mainWindow });
     }
   });
 
