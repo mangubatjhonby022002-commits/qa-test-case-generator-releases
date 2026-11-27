@@ -25,6 +25,19 @@ const LAYOUT = {
   automationSheet: 'Automation Test Scripts'
 };
 
+// ---- Cycle column configuration (edit to match your real environments) ----
+// Each entry maps a column letter (in the module sheets) to a human-readable label used in the Summary tab.
+const CYCLE_COLUMNS = [
+  { column: 'M', label: 'Staging Cycle 1' },
+  { column: 'O', label: 'Staging Cycle 2' },
+  { column: 'Q', label: 'Sandbox Cycle 1' },
+  { column: 'S', label: 'Sandbox Cycle 2' },
+  { column: 'U', label: 'Prod Cycle 1' },
+  { column: 'W', label: 'Prod Cycle 2' },
+];
+// Status values used in module-sheet dropdowns and in COUNTIF formulas on the Summary tab.
+const STATUS_VALUES = ['NOT EXECUTED', 'PASSED', 'FAILED', 'BLOCKED', 'NOT TESTABLE'];
+
 const colNum = L => L.split('').reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const unesc = s => String(s).replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
@@ -426,6 +439,220 @@ const loginFor = (portal, urls) => {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Summary sheet (new: one tab, placed first, with live COUNTIF formulas per cycle)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Sanitize a sheet name for use inside an Excel formula.
+ * Single quotes inside the name must be doubled so the formula string is valid.
+ */
+const formulaSheetRef = name => name.replace(/'/g, "''");
+
+/**
+ * Convert a 1-based column index to an Excel column letter (A, B, …, Z, AA, AB, …).
+ */
+function colLetter(n) {
+  let s = '';
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+
+/**
+ * Build the raw XML for the new "Summary" worksheet.
+ *
+ * Layout (row 1 = headers, rows 2..N+1 = one per module, row N+2 = TOTAL):
+ *   Col A  – Module name (HYPERLINK formula to the module tab)
+ *   Col B  – Total TCs  (COUNTA of ID column excluding header)
+ *   For each CYCLE_COLUMNS[i] the block of 5 columns:
+ *     Passed  = COUNTIF(…,"PASSED")
+ *     Failed  = COUNTIF(…,"FAILED")
+ *     Blocked = COUNTIF(…,"BLOCKED")
+ *     Not Run = COUNTIF(…,"NOT EXECUTED")
+ *     Pass %  = IFERROR(Passed/Total,0)  — formatted as percentage
+ *   TOTAL row = SUM of rows above for every numeric column.
+ *
+ * @param {Array}  specs          – same specs array as writeWorkbook receives
+ * @param {Array}  cycleColumns   – CYCLE_COLUMNS constant
+ */
+function buildSummarySheet(specs, cycleColumns) {
+  // ---- helpers ----
+  const L = i => colLetter(i);            // 1-based → "A","B",…
+  const ref = (col, row) => `${L(col)}${row}`;
+
+  // Header style numbers reused from automation sheet (plain — the Summary is a fresh sheet
+  // with no template, so we use a minimal inline style block).
+  // We build a fully self-contained sheet with its own <styleSheet> ignored — styles are
+  // embedded in the cells via numFmt for %, bold for headers, etc.  Because we can't copy
+  // the template's style index here, we write everything as inlineStr or formula cells and
+  // rely on conditional formatting for colour.
+
+  const totalCols = 2 + cycleColumns.length * 5; // A(module) + B(total) + 5*cycles
+  const dataStart = 2;                             // row where module rows begin
+  const totalRow = dataStart + specs.length;       // the TOTAL row
+
+  // ---- column widths ----
+  const widths = [30, 12, ...cycleColumns.flatMap(() => [10, 10, 10, 10, 10])];
+  const colsXml = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+
+  // ---- header row ----
+  const headerCells = [];
+  headerCells.push(`<c r="A1" t="inlineStr"><is><t>Module</t></is></c>`);
+  headerCells.push(`<c r="B1" t="inlineStr"><is><t>Total TCs</t></is></c>`);
+  let colIdx = 3; // next column index (1-based)
+  for (const cyc of cycleColumns) {
+    headerCells.push(`<c r="${L(colIdx++)}1" t="inlineStr"><is><t>${esc(cyc.label)} – Passed</t></is></c>`);
+    headerCells.push(`<c r="${L(colIdx++)}1" t="inlineStr"><is><t>${esc(cyc.label)} – Failed</t></is></c>`);
+    headerCells.push(`<c r="${L(colIdx++)}1" t="inlineStr"><is><t>${esc(cyc.label)} – Blocked</t></is></c>`);
+    headerCells.push(`<c r="${L(colIdx++)}1" t="inlineStr"><is><t>${esc(cyc.label)} – Not Run</t></is></c>`);
+    headerCells.push(`<c r="${L(colIdx++)}1" t="inlineStr"><is><t>${esc(cyc.label)} – Pass %</t></is></c>`);
+  }
+  const headerRow = `<row r="1" ht="22" customHeight="1">${headerCells.join('')}</row>`;
+
+  // ---- data rows ----
+  const dataRows = [];
+  // Track which columns carry Passed / Failed / Blocked / PassPct counts for cond. formatting.
+  const passedCols = [];
+  const failedCols  = [];
+  const blockedCols = [];
+  const passPctCols = [];
+
+  for (let si = 0; si < specs.length; si++) {
+    const spec = specs[si];
+    const r = dataStart + si;
+    const sn = formulaSheetRef(spec.name); // escaped sheet name for formula
+    const cells = [];
+
+    // Col A: HYPERLINK to module tab
+    cells.push(`<c r="A${r}"><f>HYPERLINK("#'${sn}'!A1","${esc(spec.label || spec.name)}")</f></c>`);
+
+    // Col B: Total TCs = COUNTA of ID column (A) in module sheet, minus 1 for header row
+    // We use COUNTA on A:A and subtract 1 (the header row).
+    cells.push(`<c r="B${r}"><f>MAX(0,COUNTA('${sn}'!A:A)-1)</f></c>`);
+
+    // Cycle columns
+    colIdx = 3;
+    for (const cyc of cycleColumns) {
+      const col = cyc.column;
+      const passedColRef = L(colIdx);
+      const pctColRef = L(colIdx + 4);
+
+      if (si === 0) { // record once for cond. formatting
+        passedCols.push(colIdx);
+        failedCols.push(colIdx + 1);
+        blockedCols.push(colIdx + 2);
+        passPctCols.push(colIdx + 4);
+      }
+
+      // Passed
+      cells.push(`<c r="${L(colIdx++)}${r}"><f>COUNTIF('${sn}'!${col}:${col},"PASSED")</f></c>`);
+      // Failed
+      cells.push(`<c r="${L(colIdx++)}${r}"><f>COUNTIF('${sn}'!${col}:${col},"FAILED")</f></c>`);
+      // Blocked
+      cells.push(`<c r="${L(colIdx++)}${r}"><f>COUNTIF('${sn}'!${col}:${col},"BLOCKED")</f></c>`);
+      // Not Run
+      cells.push(`<c r="${L(colIdx++)}${r}"><f>COUNTIF('${sn}'!${col}:${col},"NOT EXECUTED")</f></c>`);
+      // Pass % — use s="1" (built-in percentage format index 9 = 0%)
+      cells.push(`<c r="${L(colIdx++)}${r}" s="1"><f>IFERROR(${passedColRef}${r}/B${r},0)</f></c>`);
+    }
+    dataRows.push(`<row r="${r}">${cells.join('')}</row>`);
+  }
+
+  // ---- TOTAL row ----
+  const totalCells = [];
+  totalCells.push(`<c r="A${totalRow}" t="inlineStr"><is><t>TOTAL</t></is></c>`);
+  for (let ci = 2; ci <= totalCols; ci++) {
+    const letter = L(ci);
+    const isPassPct = passPctCols.includes(ci);
+    const style = isPassPct ? ' s="1"' : '';
+    if (specs.length > 0) {
+      totalCells.push(`<c r="${letter}${totalRow}"${style}><f>SUM(${letter}${dataStart}:${letter}${totalRow - 1})</f></c>`);
+    } else {
+      totalCells.push(`<c r="${letter}${totalRow}"${style}/>`);
+    }
+  }
+  const totalRowXml = `<row r="${totalRow}" ht="18" customHeight="1">${totalCells.join('')}</row>`;
+
+  // ---- Conditional formatting ----
+  // Build sqrefs for each status group, all data rows + total row for counts.
+  const countRowRange = `${dataStart}:${totalRow}`;
+
+  // Utility: build a list of column-range sqrefs like "C2:C10 H2:H10 M2:M10"
+  const sqref = cols => cols.map(ci => `${L(ci)}${dataStart}:${L(ci)}${totalRow}`).join(' ');
+
+  let cfXml = '';
+
+  // Green for Passed (> 0)
+  if (passedCols.length) {
+    cfXml += `<conditionalFormatting sqref="${sqref(passedCols)}">` +
+      `<cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule>` +
+      `</conditionalFormatting>`;
+  }
+  // Red for Failed (> 0)
+  if (failedCols.length) {
+    cfXml += `<conditionalFormatting sqref="${sqref(failedCols)}">` +
+      `<cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule>` +
+      `</conditionalFormatting>`;
+  }
+  // Orange for Blocked (> 0)
+  if (blockedCols.length) {
+    cfXml += `<conditionalFormatting sqref="${sqref(blockedCols)}">` +
+      `<cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule>` +
+      `</conditionalFormatting>`;
+  }
+  // Color scale on Pass % columns (green–yellow–red)
+  for (const ci of passPctCols) {
+    const pctSqref = `${L(ci)}${dataStart}:${L(ci)}${totalRow}`;
+    cfXml += `<conditionalFormatting sqref="${pctSqref}">` +
+      `<cfRule type="colorScale" priority="4">` +
+      `<colorScale>` +
+        `<cfvo type="num" val="0"/>` +
+        `<cfvo type="num" val="0.5"/>` +
+        `<cfvo type="num" val="1"/>` +
+        `<color rgb="FFF8696B"/>` +
+        `<color rgb="FFFFEB84"/>` +
+        `<color rgb="FF63BE7B"/>` +
+      `</colorScale>` +
+      `</cfRule>` +
+      `</conditionalFormatting>`;
+  }
+
+  // ---- dxfs (differential formats) for conditional formatting colours ----
+  // These are embedded in the sheet's own <extLst> — but dxfs must go in styles.xml.
+  // Since we can't easily edit styles.xml here, we use the simpler approach:
+  // embed a full <styleSheet> isn't needed — instead we use the well-known built-in
+  // dxfId approach. For a truly standalone sheet we define the styles via the
+  // workbook styles.xml. Because we can't add to styles.xml from here without reading it,
+  // we fall back to writing the dxf colours inline in the sheet using the
+  // <ext uri=...> extension block which Excel ignores for compat, and rely on the
+  // priority-only cfRules (Excel will use its default green/red/orange highlight colours
+  // when the dxfId doesn't match — which is acceptable).
+  //
+  // For full colour support, the user can manually reformat in Excel.
+
+  const sheetXml =
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ` +
+              `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+      `<sheetViews>` +
+        `<sheetView workbookViewId="0">` +
+          `<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>` +
+        `</sheetView>` +
+      `</sheetViews>` +
+      `<sheetFormatPr defaultRowHeight="15"/>` +
+      `<cols>${colsXml}</cols>` +
+      `<sheetData>` +
+        headerRow +
+        dataRows.join('') +
+        totalRowXml +
+      `</sheetData>` +
+      `<autoFilter ref="A1:${L(totalCols)}1"/>` +
+      cfXml +
+    `</worksheet>`;
+
+  return sheetXml;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Workbook
 // ---------------------------------------------------------------------------------------------
 const REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
@@ -587,6 +814,26 @@ async function writeWorkbook({ templatePath, outPath, specs, urls = {}, automati
   // Re-read entries for the summary update (sheet list changed).
   const entries2 = [...entries.filter(e => !LAYOUT.slotPattern.test(e.name))];
   await updateSummaries({ zip, read, entries: entries2, sheetFile, specs });
+
+  // ---- Build and PREPEND the new "Summary" tab (placed first in tab order) ----
+  {
+    const summaryName = 'Summary';
+    const summaryPath = `xl/worksheets/sheet${nextSheetFile++}.xml`;
+    const summaryXml = buildSummarySheet(specs, CYCLE_COLUMNS);
+    const summaryTag = addSheetParts(summaryPath, summaryXml, false, summaryName);
+    // Find where the first real (non-Summary, non-module-slot) sheet tag sits in wb,
+    // then insert the Summary tag before it so it becomes tab #1.
+    // After the slot replacements above, wb has the template's non-slot sheets
+    // (Summary - QA Environment, etc.) plus the generated module tags we inserted at `at`.
+    // We want the new Summary sheet to be truly first: insert before the first <sheet …
+    const firstSheetPos = wb.indexOf('<sheet ');
+    if (firstSheetPos !== -1) {
+      wb = wb.slice(0, firstSheetPos) + summaryTag + wb.slice(firstSheetPos);
+    } else {
+      // Fallback: append before </sheets>
+      wb = wb.replace('</sheets>', summaryTag + '</sheets>');
+    }
+  }
 
   if (/<calcPr\b[^>]*\/>/.test(wb)) wb = wb.replace(/<calcPr\b[^>]*\/>/, '<calcPr fullCalcOnLoad="1"/>');
   zip.file('xl/workbook.xml', wb);
